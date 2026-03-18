@@ -1,0 +1,349 @@
+import { useState, useEffect, useRef } from "react";
+
+const TERRITORIES = [
+  { id: 0,  name: "Punjab",    x: 160, y: 80,  neighbors: [1,3],       symbol: "⚔️", color: "#e67e22" },
+  { id: 1,  name: "Kashmir",   x: 290, y: 45,  neighbors: [0,2,4],     symbol: "❄️", color: "#3498db" },
+  { id: 2,  name: "Nepal",     x: 430, y: 65,  neighbors: [1,4,5],     symbol: "🏔️", color: "#8e44ad" },
+  { id: 3,  name: "Rajputana", x: 120, y: 195, neighbors: [0,4,6],     symbol: "🦁", color: "#c0392b" },
+  { id: 4,  name: "Magadha",   x: 305, y: 185, neighbors: [1,2,3,5,6,7], symbol: "🔱", color: "#d4ac0d" },
+  { id: 5,  name: "Bengal",    x: 465, y: 175, neighbors: [2,4,7],     symbol: "🐯", color: "#16a085" },
+  { id: 6,  name: "Malwa",     x: 185, y: 305, neighbors: [3,4,7,8],   symbol: "🌸", color: "#e91e8c" },
+  { id: 7,  name: "Kalinga",   x: 390, y: 300, neighbors: [4,5,6,9],   symbol: "⚓", color: "#2980b9" },
+  { id: 8,  name: "Gujarat",   x: 75,  y: 390, neighbors: [6,9],       symbol: "🌊", color: "#1abc9c" },
+  { id: 9,  name: "Deccan",    x: 275, y: 405, neighbors: [6,7,8,10],  symbol: "🌋", color: "#e74c3c" },
+  { id: 10, name: "Andhra",    x: 410, y: 430, neighbors: [7,9,11],    symbol: "🦚", color: "#27ae60" },
+  { id: 11, name: "Chola",     x: 350, y: 520, neighbors: [10,12],     symbol: "🐘", color: "#f39c12" },
+  { id: 12, name: "Kerala",    x: 225, y: 525, neighbors: [9,11],      symbol: "🌴", color: "#2ecc71" },
+  { id: 13, name: "Sind",      x: 45,  y: 255, neighbors: [3,8],       symbol: "🌵", color: "#e67e22" },
+  { id: 14, name: "Assam",     x: 540, y: 130, neighbors: [2,5],       symbol: "🍃", color: "#1abc9c" },
+];
+
+const WIN=10, DURATION=120, EL_INTERVAL=30, BETRAY_COST=25;
+
+function initGame() {
+  const own={}, tr={};
+  TERRITORIES.forEach(t=>{ own[t.id]="neutral"; tr[t.id]=Math.floor(Math.random()*5)+3; });
+  [0,3,13].forEach(id=>{ own[id]="player"; tr[id]=10; });
+  [2,5,14].forEach(id=>{ own[id]="ai"; tr[id]=10; });
+  return {own,tr};
+}
+
+function doAttack(fromId,toId,side,useEl,own,tr){
+  const o={...own}, t={...tr};
+  const atk=Math.floor(t[fromId]*0.6);
+  if(atk<1) return {own:o,tr:t,success:false};
+  t[fromId]=Math.ceil(t[fromId]*0.4);
+  let def=useEl?Math.floor(t[toId]*0.5):t[toId];
+  if(atk>def){ o[toId]=side; t[toId]=atk-def; return {own:o,tr:t,success:true}; }
+  t[toId]=def-atk;
+  return {own:o,tr:t,success:false};
+}
+
+function countWin(own){
+  const p=Object.values(own).filter(v=>v==="player").length;
+  const a=Object.values(own).filter(v=>v==="ai").length;
+  if(p>=WIN) return "player"; if(a>=WIN) return "ai"; return null;
+}
+
+const TERRAIN = [
+  // mountains top
+  {type:"mountain", x:380,y:30},{type:"mountain",x:420,y:20},{type:"mountain",x:460,y:35},{type:"mountain",x:500,y:25},{type:"mountain",x:540,y:40},
+  {type:"mountain",x:250,y:15},{type:"mountain",x:290,y:10},{type:"mountain",x:330,y:20},
+  // forests
+  {type:"tree",x:60,y:120},{type:"tree",x:90,y:105},{type:"tree",x:75,y:140},
+  {type:"tree",x:500,y:200},{type:"tree",x:530,y:185},{type:"tree",x:515,y:215},
+  {type:"tree",x:140,y:450},{type:"tree",x:160,y:435},{type:"tree",x:150,y:465},
+  {type:"tree",x:470,y:480},{type:"tree",x:490,y:465},{type:"tree",x:480,y:495},
+  // rivers
+  {type:"river", points:"M30,180 Q80,220 60,280 Q40,340 90,380"},
+  {type:"river", points:"M340,120 Q360,160 350,210 Q340,260 370,300"},
+  {type:"river", points:"M200,340 Q240,370 260,420 Q280,460 260,500"},
+];
+
+function Mountain({x,y}){
+  return <polygon points={`${x},${y+18} ${x+12},${y} ${x+24},${y+18}`} fill="#b0a090" stroke="#8a7a6a" strokeWidth={0.8}/>;
+}
+function Tree({x,y}){
+  return <g><rect x={x+5} y={y+14} width={4} height={6} fill="#7a5c3a"/><polygon points={`${x},${y+16} ${x+7},${y} ${x+14},${y+16}`} fill="#3a7a3a" stroke="#2a5a2a" strokeWidth={0.5}/><polygon points={`${x+1},${y+10} ${x+7},${y-4} ${x+13},${y+10}`} fill="#2d6e2d" stroke="#1e4e1e" strokeWidth={0.5}/></g>;
+}
+
+function TerritoryNode({t, own, tr, selected, isTarget, isBetrayTgt, onClick}){
+  const side = own[t.id];
+  const fill = selected===t.id ? "#f39c12" : side==="player" ? "#1a6fa8" : side==="ai" ? "#a01a1a" : "#5a5a6a";
+  const ring = isTarget ? "#ffe066" : isBetrayTgt ? "#cc88ff" : selected===t.id ? "#ffc300" : side==="player"?"#5bb8ff":side==="ai"?"#ff6666":"#aaaaaa";
+  const r = 26;
+  return (
+    <g onClick={onClick} style={{cursor:"pointer"}} transform={`translate(${t.x},${t.y})`}>
+      {(isTarget||isBetrayTgt||selected===t.id) && <circle r={r+7} fill="none" stroke={ring} strokeWidth={2.5} strokeDasharray="5 3" opacity={0.9}/>}
+      <circle r={r+3} fill={fill} opacity={0.25}/>
+      <circle r={r} fill={fill} stroke={ring} strokeWidth={2}/>
+      <circle r={r-5} fill="none" stroke={ring} strokeWidth={0.8} opacity={0.5}/>
+      <text textAnchor="middle" dominantBaseline="middle" dy={-6} fontSize={13}>{t.symbol}</text>
+      <text textAnchor="middle" fontSize={7} fontWeight="bold" fill="white" dy={5} opacity={0.9}>{t.name}</text>
+      <text textAnchor="middle" fontSize={10} fontWeight="bold" fill="white" dy={15}>{Math.floor(tr[t.id])}</text>
+    </g>
+  );
+}
+
+export default function App(){
+  const g=initGame();
+  const [own,setOwn]=useState(g.own);
+  const [tr,setTr]=useState(g.tr);
+  const [sel,setSel]=useState(null);
+  const [time,setTime]=useState(DURATION);
+  const [elephants,setElephants]=useState(1);
+  const [gold,setGold]=useState(10);
+  const [elTimer,setElTimer]=useState(EL_INTERVAL);
+  const [gameOver,setGameOver]=useState(null);
+  const [mode,setMode]=useState("normal");
+  const [log,setLog]=useState(["Your kingdom rises! Conquer the subcontinent!"]);
+  const [anims,setAnims]=useState([]);
+  const ref=useRef({});
+  ref.current={own,tr,elephants,gold,time};
+
+  const addLog=m=>setLog(l=>[m,...l].slice(0,5));
+  const addAnim=(x,y,text,color)=>{
+    const id=Date.now()+Math.random();
+    setAnims(a=>[...a,{id,x,y,text,color}]);
+    setTimeout(()=>setAnims(a=>a.filter(an=>an.id!==id)),1300);
+  };
+
+  useEffect(()=>{
+    if(gameOver) return;
+    const iv=setInterval(()=>{
+      const {own:co,tr:ct}=ref.current;
+      setTime(t=>{
+        if(t<=1){
+          const p=Object.values(co).filter(v=>v==="player").length;
+          const a=Object.values(co).filter(v=>v==="ai").length;
+          setGameOver(p>a?"player":p<a?"ai":"draw"); return 0;
+        } return t-1;
+      });
+      setElTimer(et=>{ if(et<=1){setElephants(e=>e+1);addLog("A war elephant joins your ranks!");return EL_INTERVAL;} return et-1;});
+      const pc=Object.values(co).filter(v=>v==="player").length;
+      setGold(g=>g+pc*3/10);
+      setTr(t=>{ const n={...t}; TERRITORIES.forEach(ter=>{n[ter.id]=Math.min(n[ter.id]+0.3,40);}); return n;});
+      if(Math.random()<0.4){
+        const srcs=TERRITORIES.filter(t=>co[t.id]==="ai"&&ct[t.id]>5);
+        if(srcs.length>0){
+          const src=srcs[Math.floor(Math.random()*srcs.length)];
+          const cands=src.neighbors.filter(n=>co[n]!=="ai");
+          if(cands.length>0){
+            const tgt=cands.sort((a,b)=>ct[a]-ct[b])[0];
+            const useEl=Math.random()<0.15&&ct[tgt]>10;
+            const res=doAttack(src.id,tgt,"ai",useEl,co,ct);
+            setOwn(res.own); setTr(res.tr);
+            if(res.success){
+              const pos=TERRITORIES.find(t=>t.id===tgt);
+              addLog(`AI seized ${pos.name}!${useEl?" (elephant!)":""}`);
+              addAnim(pos.x,pos.y,useEl?"Seized!":"Seized!","#c0392b");
+              const w=countWin(res.own); if(w) setGameOver(w);
+            }
+          }
+        }
+      }
+    },1000);
+    return ()=>clearInterval(iv);
+  },[gameOver]);
+
+  const handleClick=tid=>{
+    if(gameOver) return;
+    const {own:co,tr:ct,gold:cg}=ref.current;
+    if(mode==="betray"){
+      if(co[tid]==="ai"&&cg>=BETRAY_COST){
+        setGold(g=>g-BETRAY_COST);
+        const no={...co,[tid]:"player"}, nt={...ct,[tid]:Math.floor(ct[tid]/2)};
+        setOwn(no); setTr(nt);
+        const pos=TERRITORIES.find(t=>t.id===tid);
+        addAnim(pos.x,pos.y,"Betrayed!","#8e44ad");
+        addLog(`${pos.name} defected to your side!`);
+        const w=countWin(no); if(w) setGameOver(w);
+        setMode("normal");
+      } return;
+    }
+    if(co[tid]==="player"){setSel(tid);return;}
+    if(sel!==null&&co[sel]==="player"){
+      const srcT=TERRITORIES.find(t=>t.id===sel);
+      if(!srcT.neighbors.includes(tid)){setSel(null);return;}
+      const useEl=mode==="elephant"&&elephants>0;
+      if(useEl) setElephants(e=>e-1);
+      const res=doAttack(sel,tid,"player",useEl,co,ct);
+      setOwn(res.own); setTr(res.tr);
+      const pos=TERRITORIES.find(t=>t.id===tid);
+      if(res.success){
+        addLog(`You conquered ${pos.name}!${useEl?" (elephant charge!)":""}`);
+        addAnim(pos.x,pos.y,useEl?"Victory!":"Conquered!","#27ae60");
+        const w=countWin(res.own); if(w) setGameOver(w);
+      } else {
+        addLog(`Attack on ${pos.name} repelled!`);
+        addAnim(pos.x,pos.y,"Repelled!","#e67e22");
+      }
+      setSel(null); setMode("normal");
+    }
+  };
+
+  const restart=()=>{
+    const g=initGame(); setOwn(g.own); setTr(g.tr); setSel(null); setTime(DURATION);
+    setElephants(1); setGold(10); setElTimer(EL_INTERVAL); setGameOver(null);
+    setMode("normal"); setLog(["A new campaign begins!"]); setAnims([]);
+  };
+
+  const pCount=Object.values(own).filter(v=>v==="player").length;
+  const aCount=Object.values(own).filter(v=>v==="ai").length;
+  const mins=Math.floor(time/60), secs=time%60;
+  const isTarget=tid=>sel!==null&&own[tid]!=="player"&&TERRITORIES.find(t=>t.id===sel)?.neighbors.includes(tid);
+  const isBetrayTgt=tid=>mode==="betray"&&own[tid]==="ai";
+
+  return (
+    <div style={{fontFamily:"var(--font-sans)",padding:12,maxWidth:720,margin:"0 auto"}}>
+      <div style={{textAlign:"center",marginBottom:8}}>
+        <span style={{fontSize:22,fontWeight:500,color:"var(--color-text-primary)"}}>Rajya Yuddh</span>
+        <span style={{fontSize:13,color:"var(--color-text-secondary)",marginLeft:8}}>Kingdom War</span>
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:10,justifyContent:"center",flexWrap:"wrap"}}>
+        {[
+          {label:"You",value:`${pCount}/15`,color:"#5bb8ff"},
+          {label:"AI Raja",value:`${aCount}/15`,color:"#ff6666"},
+          {label:"Time",value:`${mins}:${secs.toString().padStart(2,"0")}`,color:time<30?"#e74c3c":"var(--color-text-primary)"},
+          {label:"Elephants",value:`${elephants}`,color:"#cc88ff"},
+          {label:"Gold",value:`${Math.floor(gold)}`,color:"#f4c430"},
+        ].map(item=>(
+          <div key={item.label} style={{background:"var(--color-background-secondary)",borderRadius:8,padding:"6px 14px",textAlign:"center",minWidth:70}}>
+            <div style={{fontSize:11,color:"var(--color-text-secondary)"}}>{item.label}</div>
+            <div style={{fontSize:18,fontWeight:500,color:item.color}}>{item.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:6,justifyContent:"center"}}>
+        <button onClick={()=>setMode(mode==="elephant"?"normal":"elephant")} disabled={elephants<1||!!gameOver}
+          style={{padding:"6px 14px",fontSize:13,borderRadius:8,border:`2px solid ${mode==="elephant"?"#cc88ff":"var(--color-border-secondary)"}`,background:mode==="elephant"?"#f5eaff":"var(--color-background-primary)",color:mode==="elephant"?"#6c3483":"var(--color-text-primary)",cursor:elephants>0?"pointer":"not-allowed",fontWeight:mode==="elephant"?500:400}}>
+          🐘 Elephant ({elephants})
+        </button>
+        <button onClick={()=>setMode(mode==="betray"?"normal":"betray")} disabled={gold<BETRAY_COST||!!gameOver}
+          style={{padding:"6px 14px",fontSize:13,borderRadius:8,border:`2px solid ${mode==="betray"?"#cc88ff":"var(--color-border-secondary)"}`,background:mode==="betray"?"#f5eaff":"var(--color-background-primary)",color:mode==="betray"?"#6c3483":"var(--color-text-primary)",cursor:gold>=BETRAY_COST?"pointer":"not-allowed",fontWeight:mode==="betray"?500:400}}>
+          ⚡ Betray ({BETRAY_COST}g)
+        </button>
+        {mode!=="normal"&&<button onClick={()=>{setMode("normal");setSel(null);}} style={{padding:"6px 14px",fontSize:13,borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-primary)",color:"var(--color-text-secondary)",cursor:"pointer"}}>Cancel</button>}
+      </div>
+
+      <div style={{textAlign:"center",fontSize:12,color:"var(--color-text-secondary)",marginBottom:6,minHeight:16}}>
+        {mode==="elephant"&&<span style={{color:"#8e44ad"}}>Select your territory, then attack — elephant crushes 50% of enemy troops!</span>}
+        {mode==="betray"&&<span style={{color:"#8e44ad"}}>Click a red enemy territory to bribe it!</span>}
+        {mode==="normal"&&sel!==null&&<span style={{color:"#3498db"}}>Now click an adjacent enemy or neutral territory to attack!</span>}
+        {mode==="normal"&&sel===null&&!gameOver&&"Click your territory (blue) to select, then attack a neighbor."}
+      </div>
+
+      <div style={{position:"relative",maxWidth:620,margin:"0 auto"}}>
+        <svg viewBox="0 0 620 580" style={{width:"100%",borderRadius:14,border:"1.5px solid #a08060",display:"block"}}>
+          <defs>
+            <pattern id="parchment" patternUnits="userSpaceOnUse" width="60" height="60">
+              <rect width="60" height="60" fill="#e8d8b0"/>
+              <rect width="60" height="60" fill="url(#grain)" opacity="0.4"/>
+            </pattern>
+            <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/><feBlend in="SourceGraphic" mode="multiply"/></filter>
+            <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+              <stop offset="60%" stopColor="transparent"/>
+              <stop offset="100%" stopColor="#c8a870" stopOpacity="0.5"/>
+            </radialGradient>
+          </defs>
+
+          <rect width="620" height="580" fill="#dfc98a"/>
+          <rect width="620" height="580" fill="#e8d8b0" opacity="0.7"/>
+
+          {/* subtle land regions */}
+          <ellipse cx="200" cy="200" rx="180" ry="220" fill="#d4c07a" opacity="0.3"/>
+          <ellipse cx="400" cy="300" rx="160" ry="200" fill="#c8b870" opacity="0.25"/>
+          <ellipse cx="300" cy="450" rx="180" ry="120" fill="#c0b060" opacity="0.2"/>
+
+          {/* rivers */}
+          <path d="M30,180 Q80,220 60,280 Q40,340 90,380" stroke="#7ab8d4" strokeWidth={3} fill="none" opacity={0.7}/>
+          <path d="M340,120 Q360,160 350,210 Q340,260 370,300" stroke="#7ab8d4" strokeWidth={2.5} fill="none" opacity={0.6}/>
+          <path d="M200,340 Q240,370 260,420 Q280,460 260,500" stroke="#7ab8d4" strokeWidth={2.5} fill="none" opacity={0.6}/>
+
+          {/* mountains */}
+          {[[360,22],[395,12],[430,18],[465,8],[500,20],[535,14],[555,30]].map(([x,y],i)=><Mountain key={i} x={x} y={y}/>)}
+          {[[240,8],[275,2],[310,12]].map(([x,y],i)=><Mountain key={`m2${i}`} x={x} y={y}/>)}
+          {[[30,60],[55,50],[80,62]].map(([x,y],i)=><Mountain key={`m3${i}`} x={x} y={y}/>)}
+
+          {/* trees */}
+          {[[50,110],[78,98],[62,128],[45,142]].map(([x,y],i)=><Tree key={`t1${i}`} x={x} y={y}/>)}
+          {[[496,192],[522,178],[510,208]].map(([x,y],i)=><Tree key={`t2${i}`} x={x} y={y}/>)}
+          {[[130,450],[150,435],[142,462]].map(([x,y],i)=><Tree key={`t3${i}`} x={x} y={y}/>)}
+          {[[460,478],[482,462],[472,492]].map(([x,y],i)=><Tree key={`t4${i}`} x={x} y={y}/>)}
+          {[[560,360],[578,345],[570,372]].map(([x,y],i)=><Tree key={`t5${i}`} x={x} y={y}/>)}
+
+          {/* sea hints */}
+          <path d="M0,400 Q30,420 0,440" stroke="#7ab8d4" strokeWidth={1.5} fill="none" opacity={0.5}/>
+          <path d="M0,450 Q25,465 0,480" stroke="#7ab8d4" strokeWidth={1.2} fill="none" opacity={0.4}/>
+          <text x={580} y={560} fontSize={8} fill="#7ab8d4" opacity={0.7} textAnchor="end">Bay of Bengal</text>
+          <text x={18} y={560} fontSize={8} fill="#7ab8d4" opacity={0.7}>Arabian Sea</text>
+
+          {/* compass */}
+          <g transform="translate(572,48)">
+            <circle r={16} fill="#e8d8b0" stroke="#a08060" strokeWidth={1}/>
+            <polygon points="0,-13 3,0 0,4 -3,0" fill="#c0392b"/>
+            <polygon points="0,13 3,0 0,-4 -3,0" fill="#888"/>
+            <text textAnchor="middle" y={-15} fontSize={7} fill="#555" fontWeight="bold">N</text>
+          </g>
+
+          {/* road connections */}
+          {TERRITORIES.map(t=>t.neighbors.map(nid=>nid>t.id?(
+            <line key={`${t.id}-${nid}`} x1={t.x} y1={t.y} x2={TERRITORIES[nid].x} y2={TERRITORIES[nid].y}
+              stroke="#b8965a" strokeWidth={2} strokeDasharray="5 4" opacity={0.6}/>
+          ):null))}
+
+          {/* vignette overlay */}
+          <rect width="620" height="580" fill="url(#vignette)" rx={14}/>
+
+          {/* territories */}
+          {TERRITORIES.map(t=>(
+            <TerritoryNode key={t.id} t={t} own={own} tr={tr}
+              selected={sel} isTarget={isTarget(t.id)} isBetrayTgt={isBetrayTgt(t.id)}
+              onClick={()=>handleClick(t.id)}/>
+          ))}
+        </svg>
+
+        {anims.map(a=>(
+          <div key={a.id} style={{position:"absolute",left:`${(a.x/620)*100}%`,top:`${(a.y/580)*100}%`,transform:"translate(-50%,-130%)",color:a.color,fontWeight:600,fontSize:13,pointerEvents:"none",animation:"floatUp 1.3s ease-out forwards",whiteSpace:"nowrap",textShadow:"0 1px 3px #000a"}}>
+            {a.text}
+          </div>
+        ))}
+      </div>
+
+      <div style={{marginTop:8,background:"var(--color-background-secondary)",borderRadius:8,padding:"8px 12px",maxHeight:72,overflow:"hidden"}}>
+        {log.map((l,i)=>(
+          <div key={i} style={{fontSize:12,color:i===0?"var(--color-text-primary)":"var(--color-text-secondary)",fontWeight:i===0?500:400,lineHeight:1.5}}>{l}</div>
+        ))}
+      </div>
+
+      <div style={{display:"flex",gap:12,marginTop:8,fontSize:12,color:"var(--color-text-secondary)",justifyContent:"center",flexWrap:"wrap"}}>
+        {[["#1a6fa8","#5bb8ff","You"],["#a01a1a","#ff6666","AI Raja"],["#5a5a6a","#aaaaaa","Neutral"],["#f39c12","#ffe066","Selected"]].map(([fill,ring,label])=>(
+          <span key={label} style={{display:"flex",alignItems:"center",gap:4}}>
+            <svg width={16} height={16} viewBox="0 0 16 16"><circle cx={8} cy={8} r={6} fill={fill} stroke={ring} strokeWidth={1.5}/></svg>
+            {label}
+          </span>
+        ))}
+      </div>
+
+      {gameOver&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:100}}>
+          <div style={{background:"var(--color-background-primary)",borderRadius:16,padding:"2rem 2.5rem",textAlign:"center",maxWidth:320,width:"90%",border:"0.5px solid var(--color-border-primary)"}}>
+            <div style={{fontSize:44,marginBottom:8}}>{gameOver==="player"?"👑":gameOver==="draw"?"⚖️":"💀"}</div>
+            <div style={{fontSize:22,fontWeight:500,marginBottom:8,color:"var(--color-text-primary)"}}>
+              {gameOver==="player"?"Victory!":gameOver==="draw"?"Stalemate!":"Defeated!"}
+            </div>
+            <div style={{fontSize:14,color:"var(--color-text-secondary)",marginBottom:20}}>
+              {gameOver==="player"?`You held ${pCount} territories. The subcontinent bows to you!`:
+               gameOver==="draw"?"Neither kingdom could dominate. A fragile peace holds.":
+               `The AI Raja seized ${aCount} territories. Your kingdom falls.`}
+            </div>
+            <button onClick={restart} style={{padding:"10px 28px",borderRadius:8,border:"1px solid var(--color-border-secondary)",background:"var(--color-background-secondary)",color:"var(--color-text-primary)",fontSize:14,cursor:"pointer",fontWeight:500}}>New Campaign</button>
+          </div>
+        </div>
+      )}
+      <style>{`@keyframes floatUp{0%{opacity:1;transform:translate(-50%,-130%);}100%{opacity:0;transform:translate(-50%,-230%);}}`}</style>
+    </div>
+  );
+}
